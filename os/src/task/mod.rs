@@ -171,6 +171,11 @@ fn mark_current_suspended() {
     TASK_MANAGER.mark_current_suspended();
 }
 
+/// get_current_app_id
+pub fn get_current_app_id() -> usize {
+    TASK_MANAGER.inner.exclusive_access().current_task
+}
+
 /// Change the status of current `Running` task into `Exited`.
 fn mark_current_exited() {
     TASK_MANAGER.mark_current_exited();
