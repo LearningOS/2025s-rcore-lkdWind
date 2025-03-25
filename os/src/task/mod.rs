@@ -20,7 +20,7 @@ use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
-
+use crate::syscall::{insert_syscall_count, delete_syscall_count};
 pub use context::TaskContext;
 
 /// The task manager, where all the tasks are managed.
@@ -101,6 +101,7 @@ impl TaskManager {
     fn mark_current_exited(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
+        delete_syscall_count(current);
         inner.tasks[current].task_status = TaskStatus::Exited;
     }
 
@@ -123,6 +124,7 @@ impl TaskManager {
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
+            insert_syscall_count(next);
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
@@ -139,7 +141,13 @@ impl TaskManager {
 
 /// Run the first task in task list.
 pub fn run_first_task() {
+    insert_syscall_count(0);
     TASK_MANAGER.run_first_task();
+}
+
+/// 返回current_app_id
+pub fn get_current_app_id() -> usize {
+    TASK_MANAGER.inner.exclusive_access().current_task
 }
 
 /// Switch current `Running` task to the task we have found,
