@@ -27,7 +27,7 @@ const SYSCALL_TRACE: usize = 410;
 
 mod fs;
 mod process;
-
+use crate::timer::TimeVal;
 use fs::*;
 use process::*;
 
