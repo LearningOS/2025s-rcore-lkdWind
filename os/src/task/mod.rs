@@ -14,8 +14,11 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::MemorySet;
 use crate::sync::UPSafeCell;
+use crate::syscall::{delete_syscall_count, insert_syscall_count};
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -100,6 +103,7 @@ impl TaskManager {
     fn mark_current_exited(&self) {
         let mut inner = self.inner.exclusive_access();
         let cur = inner.current_task;
+        delete_syscall_count(cur);
         inner.tasks[cur].task_status = TaskStatus::Exited;
     }
 
@@ -143,6 +147,7 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            insert_syscall_count(next);
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
@@ -153,10 +158,12 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
 }
 
 /// Run the first task in task list.
 pub fn run_first_task() {
+    insert_syscall_count(get_current_app_id());
     TASK_MANAGER.run_first_task();
 }
 
@@ -206,4 +213,18 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+// pub fn current_task_block() -> &'static mut TaskControlBlock{
+//     let mut inner = TASK_MANAGER.inner.exclusive_access();
+//     let current_task = inner.current_task;
+//     inner.tasks[current_task]
+// }
+
+/// get_current_app_memory_set
+pub fn get_current_app_memory_set() -> &'static mut MemorySet {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current_task = inner.current_task;
+    let memory_set = &mut inner.tasks[current_task].memory_set;
+    unsafe{ &mut *(memory_set as *mut MemorySet) }
 }

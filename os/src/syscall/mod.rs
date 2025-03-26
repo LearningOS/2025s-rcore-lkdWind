@@ -58,7 +58,6 @@ pub fn insert_syscall_count (current_app_id: usize) {
 
 /// 计数器
 fn syscall_count(id: &usize){
-    // println!("==========={}-------",get_current_app_id());
     if let Some(v) = SYSCALL_COUNT.lock().get_mut(&get_current_app_id()).unwrap().get_mut(id) {
         *v += 1;
     }
