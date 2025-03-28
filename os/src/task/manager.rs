@@ -22,8 +22,16 @@ impl TaskManager {
         self.ready_queue.push_back(task);
     }
     /// Take a process out of the ready queue
+    /// stride find min pass
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        let task = self.ready_queue
+            .iter()
+            .min_by_key(|task|task.inner_exclusive_access().get_pass())
+            .cloned();
+        if let Some(ref task) = task {
+            self.ready_queue.retain(|t| !Arc::ptr_eq(t, task));
+        }
+        task
     }
 }
 

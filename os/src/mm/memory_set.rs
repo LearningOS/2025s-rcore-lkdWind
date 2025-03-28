@@ -34,6 +34,9 @@ lazy_static! {
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
+    // 用来存放mmap动态内存, 不用MapArea是因为在删除时很难遍历判断,而且areas一开始用来给初始化内存区域的
+    // 在MemorySet被释放后也会触发drop
+    mmap_set: BTreeMap<VirtPageNum, FrameTracker>,
 }
 
 impl MemorySet {
@@ -42,6 +45,7 @@ impl MemorySet {
         Self {
             page_table: PageTable::new(),
             areas: Vec::new(),
+            mmap_set: BTreeMap::new(),
         }
     }
     /// Get the page table token
@@ -60,6 +64,93 @@ impl MemorySet {
             None,
         );
     }
+
+    pub fn mmap(&mut self, start: usize, len: usize, port: usize) -> isize {
+        //port的后五位无效必须全为0;port不能全为0
+        if port &!0b111 != 0 || port & 0xff == 0 {
+            return -1;
+        }
+        let start_va: VirtAddr = start.into();
+        //start没有页表对齐直接失败
+        if !start_va.aligned() {
+            return -1;
+        }
+        const READ:usize = 0b001;
+        const WRITE:usize = 0b010;
+        const EXEC:usize = 0b100;
+        //PTEFlags 用户动态内存必须有U V
+        let mut flags= PTEFlags::U | PTEFlags::V;
+        //处理port
+        if port & READ != 0 {
+            flags |= PTEFlags::R;
+        }
+        if port & WRITE != 0 {
+            flags |= PTEFlags::W;
+        }
+        if port & EXEC != 0 {
+            flags |= PTEFlags::X;
+        }
+        //计算起始虚拟页表地址
+        let end_va: VirtAddr = (start + len).into();
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        // println!(
+        //     "[mmap] start = {:x} && va_star = {} && va_end = {}",
+        //     start, start_va.0, end_va.0
+        // );
+        //页表迭代器
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+        for vpn in vpn_range {
+            //先判断虚拟页表有效性,有效则返回(mapped)
+            if let Some(pte) = self.page_table.translate(vpn) {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+            //申请物理页
+            if let Some(ppn) = frame_alloc() {
+                self.page_table.map(vpn, ppn.ppn, flags);
+                //这里将虚拟页表和物理页表映射 加入memory_set的新成员mmap_set
+                self.mmap_set.insert(vpn, ppn);
+            } else {
+                //没申请到物理页
+                return -1;
+            }
+        };
+        0
+    }
+
+    pub fn unmap(&mut self, start: usize, len: usize) -> isize {
+        let start_va: VirtAddr = start.into();
+        if !start_va.aligned() {
+            return -1;
+        }
+        let end_va: VirtAddr = (start + len).into();
+        let start_vpn = start_va.into();
+        let end_vpn = end_va.ceil();
+        // println!(
+        //     "[unmap] start = {:x} && va_star = {} && va_end = {}",
+        //     start, start_va.0, end_va.0
+        // );
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+        for vpn in vpn_range {
+            if let Some(pte) = self.page_table.translate(vpn) {
+                //无效则认为已经被unmap或者未被申请
+                if !pte.is_valid() {
+                    return -1;
+                }
+            } else {
+                return -1;
+            }
+            //虚拟页表中unmap
+            self.page_table.unmap(vpn);
+            //mmap_set移除对应映射
+            self.mmap_set.remove(&vpn);
+        };
+        0
+    }
+
+
     /// remove a area
     pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
         if let Some((idx, area)) = self

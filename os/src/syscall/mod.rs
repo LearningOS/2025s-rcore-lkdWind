@@ -40,7 +40,7 @@ const SYSCALL_SPAWN: usize = 400;
 
 mod fs;
 mod process;
-
+use crate::timer::TimeVal;
 use fs::*;
 use process::*;
 /// handle syscall exception with `syscall_id` and other arguments

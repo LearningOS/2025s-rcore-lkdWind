@@ -7,6 +7,7 @@
 use super::__switch;
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
+use crate::mm::MemorySet;
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
@@ -44,6 +45,11 @@ impl Processor {
     pub fn current(&self) -> Option<Arc<TaskControlBlock>> {
         self.current.as_ref().map(Arc::clone)
     }
+
+    pub fn update_pass(&mut self) {
+        let mut inner = self.current.as_mut().unwrap().inner_exclusive_access();
+        inner.update_pass();
+    }
 }
 
 lazy_static! {
@@ -65,6 +71,8 @@ pub fn run_tasks() {
             drop(task_inner);
             // release coming task TCB manually
             processor.current = Some(task);
+            //update pass
+            processor.update_pass();
             // release processor manually
             drop(processor);
             unsafe {
@@ -74,6 +82,14 @@ pub fn run_tasks() {
             warn!("no tasks available in run_tasks");
         }
     }
+}
+
+// pub fn update_current_pass() {
+//     PROCESSOR.exclusive_access().update_pass();
+// }
+
+pub fn set_current_priority(prio: isize) {
+    PROCESSOR.exclusive_access().current().unwrap().set_priority(prio);
 }
 
 /// Get current task through take, leaving a None in its place
@@ -90,6 +106,12 @@ pub fn current_task() -> Option<Arc<TaskControlBlock>> {
 pub fn current_user_token() -> usize {
     let task = current_task().unwrap();
     task.get_user_token()
+}
+
+pub fn current_app_memory_set() -> &'static mut MemorySet {
+    let current_app: Arc<TaskControlBlock> = current_task().unwrap();
+    let memory_set = &mut current_app.inner_exclusive_access().memory_set;
+    unsafe{ &mut *(memory_set as *mut MemorySet) }
 }
 
 ///Get the mutable reference to trap context of current task
