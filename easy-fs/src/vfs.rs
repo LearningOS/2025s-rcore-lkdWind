@@ -8,8 +8,10 @@ use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
 /// Virtual filesystem layer over easy-fs
 pub struct Inode {
-    block_id: usize,
-    block_offset: usize,
+    /// block_id
+    pub block_id: usize,
+    /// block_offset
+    pub block_offset: usize,
     fs: Arc<Mutex<EasyFileSystem>>,
     block_device: Arc<dyn BlockDevice>,
 }
@@ -28,6 +30,10 @@ impl Inode {
             fs,
             block_device,
         }
+    }
+    ///ino
+    pub fn ino(&self) -> u64 {
+        (self.block_id * 8 + self.block_offset / 512) as u64
     }
     /// Call a function over a disk inode to read it
     fn read_disk_inode<V>(&self, f: impl FnOnce(&DiskInode) -> V) -> V {
@@ -73,6 +79,81 @@ impl Inode {
             })
         })
     }
+
+    /// link
+    pub fn link(&self, old_name: &str, new_name: &str) ->Option<Arc<Inode>> {
+        let mut fs = self.fs.lock();
+        if let Some(old_id) = self.read_disk_inode(|root_inode: &DiskInode| self.find_inode_id(old_name, root_inode)) {
+            let new_id = old_id;
+            let (new_block_id, new_block_offset) = fs.get_disk_inode_pos(new_id);
+            //修改目录结构 添加新目录项
+            self.modify_disk_inode(|root_inode| {
+                // 计算新目录项的位置
+                let file_count = (root_inode.size as usize) / DIRENT_SZ;
+                let new_size = (file_count + 1) * DIRENT_SZ;
+                //扩展目录大小
+                self.increase_size( new_size as u32, root_inode, &mut fs);
+                //写入新目录项
+                let dir_entry = DirEntry::new(new_name, new_id);
+                root_inode.write_at(file_count * DIRENT_SZ, dir_entry.as_bytes(),&self.block_device);
+            });
+            Some(Arc::new(Self::new(
+                new_block_id,
+                new_block_offset,
+                self.fs.clone(),
+                self.block_device.clone(),
+            )))
+        }else {
+            None
+        }
+    }
+
+    /// unlink
+    pub fn unlink(&self, name: &str) -> isize {
+        if let Some(_) = self.read_disk_inode(|root_inode: &DiskInode| self.find_inode_id(name, root_inode)) {
+            let mut buf = DirEntry::empty();
+            self.modify_disk_inode(|root_inode| {
+                let file_count = (root_inode.size as usize) / DIRENT_SZ;
+                for i in 0..file_count {
+                    // 循环读取根节点每个文件对比名称
+                    if root_inode.read_at(i * DIRENT_SZ, buf.as_bytes_mut(), &self.block_device) == DIRENT_SZ {
+                        if buf.name() == name {
+                            //把末尾的项换到删除项
+                            root_inode.read_at((file_count-1)*DIRENT_SZ, buf.as_bytes_mut(), &self.block_device);
+                            root_inode.write_at(i * DIRENT_SZ, buf.as_bytes_mut(), &self.block_device);
+                            root_inode.size -= DIRENT_SZ as u32;
+                            break;
+                        }
+                    }
+                }
+            });
+            return 0;
+        }else {
+            -1
+        }
+    }
+
+    ///get_link_num
+    pub fn get_link_num(&self, block_id: usize, block_offset: usize) -> u32 {
+        let fs = self.fs.lock();
+        let mut count = 0;
+        self.read_disk_inode(|root_inode| {
+            let mut buf = DirEntry::empty();
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                assert_eq!(
+                    root_inode.read_at(DIRENT_SZ * i, buf.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ,
+                );
+                let (now_block_id, now_block_offset) = fs.get_disk_inode_pos(buf.inode_id());
+                if now_block_id as usize == block_id && now_block_offset == block_offset {
+                    count += 1;
+                }
+            }
+        });
+        count
+    }
+
     /// Increase the size of a disk inode
     fn increase_size(
         &self,
