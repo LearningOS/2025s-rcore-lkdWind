@@ -87,6 +87,9 @@ pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
     if fd >= inner.fd_table.len() {
         return -1;
     }
+    if inner.fd_table[fd].is_none() {
+        return -1;
+    }
     let stat: Stat;
     if let Some(file) = &inner.fd_table[fd] {
         let any: &dyn Any = file.as_any();
