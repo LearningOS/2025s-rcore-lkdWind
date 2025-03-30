@@ -11,6 +11,7 @@ use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
+use crate::mm::MemorySet;
 
 /// Processor management structure
 pub struct Processor {
@@ -44,6 +45,11 @@ impl Processor {
     pub fn current(&self) -> Option<Arc<TaskControlBlock>> {
         self.current.as_ref().map(Arc::clone)
     }
+
+    pub fn update_pass(&mut self) {
+        let mut inner = self.current.as_mut().unwrap().inner_exclusive_access();
+        inner.update_pass();
+    }
 }
 
 lazy_static! {
@@ -65,6 +71,8 @@ pub fn run_tasks() {
             drop(task_inner);
             // release coming task TCB manually
             processor.current = Some(task);
+            //update pass
+            processor.update_pass();
             // release processor manually
             drop(processor);
             unsafe {
@@ -74,6 +82,17 @@ pub fn run_tasks() {
             warn!("no tasks available in run_tasks");
         }
     }
+}
+
+pub fn set_current_priority(prio: isize) {
+    PROCESSOR.exclusive_access().current().unwrap().set_priority(prio);
+}
+
+
+pub fn current_app_memory_set() -> &'static mut MemorySet {
+    let current_app: Arc<TaskControlBlock> = current_task().unwrap();
+    let memory_set = &mut current_app.inner_exclusive_access().memory_set;
+    unsafe{ &mut *(memory_set as *mut MemorySet) }
 }
 
 /// Get current task through take, leaving a None in its place

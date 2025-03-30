@@ -9,10 +9,26 @@ const TICKS_PER_SEC: usize = 100;
 const MSEC_PER_SEC: usize = 1000;
 /// The number of microseconds per second
 const MICRO_PER_SEC: usize = 1_000_000;
-
+#[repr(C)]
+#[derive(Debug)]
+/// TimeVal
+pub struct TimeVal {
+/// TimeVal.sec
+    pub sec: usize,
+/// TimeVal.usec
+    pub usec: usize,
+}
 /// Get the current time in ticks
 pub fn get_time() -> usize {
     time::read()
+}
+/// get_time_val
+pub fn get_time_val() -> TimeVal {
+    let us = get_time_us();
+    TimeVal {
+        sec:  us / MICRO_PER_SEC,
+        usec: us % MICRO_PER_SEC,
+    }
 }
 
 /// get current time in milliseconds

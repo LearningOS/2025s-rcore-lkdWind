@@ -7,16 +7,10 @@ use crate::{
     mm::{translated_refmut, translated_str},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
+        suspend_current_and_run_next,current_app_memory_set,spawn,set_current_priority,
     },
 };
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct TimeVal {
-    pub sec: usize,
-    pub usec: usize,
-}
+use crate::{config::PAGE_SIZE, mm::{PageTable,PhysAddr, VirtAddr}, timer::{get_time_val, TimeVal}};
 
 pub fn sys_exit(exit_code: i32) -> ! {
     trace!("kernel:pid[{}] sys_exit", current_task().unwrap().pid.0);
@@ -105,30 +99,75 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let page_table = PageTable::from_token(current_user_token());
+    let start = ts as usize;
+    let end = start + core::mem::size_of::<TimeVal>();
+    if (start / PAGE_SIZE) != (end / PAGE_SIZE) {
+        // 跨页
+        let first_page_end = (start / PAGE_SIZE + 1) * PAGE_SIZE;
+        let first_part_size = first_page_end - start;
+        let second_part_size = end - first_page_end;
+
+        // 写入第一个页中的数据
+        let first_part_ptr = VirtAddr::from(start);
+        let first_offset = first_part_ptr.page_offset();
+        let first_part_vpn = first_part_ptr.floor();
+        let mut first_pa:PhysAddr = page_table.translate(first_part_vpn).unwrap().ppn().into();
+        first_pa.0 += first_offset;
+        let first_part = unsafe {
+            core::slice::from_raw_parts_mut( first_pa.get_mut() as *mut u8, first_part_size)
+        };
+
+        // 写入第二个页中的数据
+        let second_part_ptr = VirtAddr::from(first_page_end);
+        let second_part_vpn = second_part_ptr.floor();
+        let second_part_pa:PhysAddr = page_table.translate(second_part_vpn).unwrap().ppn().into();
+        let second_part = unsafe {
+            core::slice::from_raw_parts_mut(second_part_pa.get_mut() as *mut u8, second_part_size)
+        };
+
+        let time_val = get_time_val();
+        let time_val_bytes = unsafe {
+            core::slice::from_raw_parts(&time_val as *const TimeVal as *const u8, core::mem::size_of::<TimeVal>())
+        };
+        first_part.copy_from_slice(&time_val_bytes[..first_part_size]);
+        second_part.copy_from_slice(&time_val_bytes[first_part_size..]);
+    } else {
+        // 不跨页
+        let kernel_vaddr = VirtAddr::from(start);
+        let offset = kernel_vaddr.page_offset();
+        let kernel_vpn = kernel_vaddr.floor();
+        let mut pa: PhysAddr = page_table.translate(kernel_vpn).unwrap().ppn().into();
+        pa.0 += offset;
+        let timeval = get_time_val();
+        unsafe {
+            *(pa.get_mut() as *mut TimeVal) = timeval;
+        }
+    }
+    0
 }
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    current_app_memory_set().mmap(start, len, port)
 }
 
 /// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    current_app_memory_set().unmap(start, len)
 }
 
 /// change data segment size
@@ -143,19 +182,23 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
+pub fn sys_spawn(path: *const u8) -> isize {
     trace!(
         "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    spawn(path)
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
         "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if prio < 2 {
+        return -1;
+    }
+    set_current_priority(prio);
+    prio
 }
