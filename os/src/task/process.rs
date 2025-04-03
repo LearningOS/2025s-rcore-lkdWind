@@ -15,6 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
 
+
 /// Process Control Block
 pub struct ProcessControlBlock {
     /// immutable
@@ -22,6 +23,125 @@ pub struct ProcessControlBlock {
     /// mutable
     inner: UPSafeCell<ProcessControlBlockInner>,
 }
+
+pub struct DeadlockDetector {
+    enabled: bool,
+    allocation: Vec<Vec<isize>>,
+    need: Vec<Vec<isize>>,
+    available: Vec<isize>,
+}
+
+impl DeadlockDetector {
+    pub fn new() -> Self {
+        let need = vec![vec![]];
+        let allocation = vec![vec![]];
+        Self {
+            enabled: false,
+            allocation,
+            need,
+            available: Vec::new(),
+        }
+    }
+    pub fn insert_mutex(&mut self, _rid: usize) {
+        // if rid < self.available.len() {
+        //     self.available[rid] = 1;
+        // }
+        self.available.push(1);
+        for thread_allocs in &mut self.allocation {
+            thread_allocs.push(0); // 初始无分配
+        }
+        for thread_needs in &mut self.need {
+            thread_needs.push(0); // 初始无需求
+        }
+    }
+    pub fn is_enable(&self) -> bool {
+        self.enabled
+    }
+    pub fn enable_deadlock_detect(&mut self, enable: bool) -> Result<(),()>{
+        self.enabled = enable;
+        Ok(())
+    }
+    pub fn release(&mut self, tid: usize, rid: usize) {
+        if self.allocation[tid][rid] == 0 {
+            return
+        } else {
+            self.available[rid] += 1;
+            self.allocation[tid][rid] -= 1;
+        }
+    }
+
+    pub fn is_unsafe(&self) -> bool {
+        let mut work = self.available.clone();
+        let mut finish = vec![false; self.allocation.len()];
+        let need = self.need.clone();
+        loop {
+            let mut found = false;
+            for i in 0..finish.len() {
+                if !finish[i] && need[i].iter().zip(&work).all(|(n,w)| *n <= *w) {
+                    for j in 0..work.len() {
+                        work[j] += self.allocation[i][j];
+                    }
+                    finish[i] = true;
+                    found = true;
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+        finish.iter().any(|&f| !f)
+    }
+
+    pub fn set_need(&mut self, tid: usize, rid: usize) {
+        self.need[tid][rid] += 1;
+    }
+
+    pub fn try_allocate(&mut self, tid: usize, rid: usize) -> isize{
+        if !self.enabled {
+            return 0
+        }
+
+        if self.is_unsafe() {
+            return 0xDEAD;
+        }
+        // println!("---------------tid:{}--rid:{}--------before------------",tid,rid);
+        // println!("need{:?}",self.need);
+        // println!("allocation {:?}",self.allocation);
+        // println!("available {:?}",self.available);
+        // println!("-------------------------------------------------------");
+        if self.available[rid] == 0 {
+            return -0xDEAD;
+        }
+        self.available[rid] -= 1;
+        self.allocation[tid][rid] += 1;
+        self.need[tid][rid] -= 1;
+        // println!("---------------tid:{}--rid:{}---------after------------",tid,rid);
+        // println!("need{:?}",self.need);
+        // println!("allocation {:?}",self.allocation);
+        // println!("available {:?}",self.available);
+        // println!("-------------------------------------------------------");
+
+        0
+    }
+
+    pub fn add_thread(&mut self) {
+        let num_resources = self.available.len();
+        self.allocation.push(vec![0; num_resources]);
+        self.need.push(vec![0; num_resources]);
+    }
+
+    pub fn add_semaphore(&mut self, initial_count: usize) {
+        self.available.push(initial_count as isize);        
+        for thread_allocs in &mut self.allocation {
+            thread_allocs.push(0);
+        }
+        for thread_needs in &mut self.need {
+            thread_needs.push(0);
+        }
+    }
+    
+}
+
 
 /// Inner of Process Control Block
 pub struct ProcessControlBlockInner {
@@ -49,6 +169,8 @@ pub struct ProcessControlBlockInner {
     pub semaphore_list: Vec<Option<Arc<Semaphore>>>,
     /// condvar list
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+
+    pub deadlock_detector: DeadlockDetector,
 }
 
 impl ProcessControlBlockInner {
@@ -119,6 +241,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_detector: DeadlockDetector::new(),
                 })
             },
         });
@@ -245,6 +368,7 @@ impl ProcessControlBlock {
                     mutex_list: Vec::new(),
                     semaphore_list: Vec::new(),
                     condvar_list: Vec::new(),
+                    deadlock_detector: DeadlockDetector::new(),
                 })
             },
         });

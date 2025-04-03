@@ -18,6 +18,13 @@ const MSEC_PER_SEC: usize = 1000;
 #[allow(dead_code)]
 const MICRO_PER_SEC: usize = 1_000_000;
 
+#[repr(C)]
+#[derive(Debug)]
+pub struct TimeVal {
+    pub sec: usize,
+    pub usec: usize,
+}
+
 /// Get the current time in ticks
 pub fn get_time() -> usize {
     time::read()
@@ -36,6 +43,15 @@ pub fn get_time_us() -> usize {
 /// Set the next timer interrupt
 pub fn set_next_trigger() {
     set_timer(get_time() + CLOCK_FREQ / TICKS_PER_SEC);
+}
+
+/// get_time_val
+pub fn get_time_val() -> TimeVal {
+    let us = get_time_us();
+    TimeVal {
+        sec:  us / MICRO_PER_SEC,
+        usec: us % MICRO_PER_SEC,
+    }
 }
 
 /// condvar for timer
